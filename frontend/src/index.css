@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+/* ==========================================================
+   Fresse brand theme
+   Centralized design tokens — do not hard-code brand colors
+   elsewhere. Reference these via Tailwind utilities
+   (bg-walnut, text-coral, bg-cream, font-display, etc.)
+   ========================================================== */
+:root {
+  --walnut: #724319;
+  --light-coral: #d88180;
+  --powder-blush: #f7b1b0;
+  --papaya-whip: #feeac7;
+  --golden-sand: #cad182;
+}
+
+@theme {
+  /* Core brand palette (exact spec values) */
+  --color-walnut: #724319;
+  --color-coral: #d88180;
+  --color-blush: #f7b1b0;
+  --color-papaya: #feeac7;
+  --color-sand: #cad182;
+
+  /* Derived tones for depth, hover and contrast-safe text */
+  --color-walnut-dark: #5a3513;
+  --color-walnut-light: #8c5a28;
+  --color-coral-dark: #c16a68;
+  --color-sand-dark: #b4bd63;
+  --color-ink: #2b1810;
+  --color-cream: #fbf5ec;
+
+  /* Footer decorative strip accents (content band reuses the core palette) */
+  --color-footer-taupe: #b89d88;
+  --color-footer-brown: #55402d;
+
+  --font-display: "Fraunces", "Georgia", serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family: var(--font-sans);
+  background: var(--color-cream);
+  color: var(--color-ink);
+}
+
+/* Visible keyboard focus state, consistent across the app */
+:focus-visible {
+  outline: 2px solid var(--color-walnut);
+  outline-offset: 2px;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+@keyframes fresse-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fresse-fade-in 0.4s ease-out both;
+}
+
+@keyframes fresse-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.55),
+    transparent
+  );
+  animation: fresse-shimmer 1.6s infinite;
+}
