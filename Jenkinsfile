@@ -43,7 +43,17 @@ pipeline {
 
         stage('Verify Deployment') {
             steps {
-                bat 'curl.exe --fail --silent --show-error http://localhost:8081/api/health'
+                bat '''
+                @echo off
+                for /L %%i in (1,1,12) do (
+                    echo Health check attempt %%i of 12...
+                    curl.exe --fail --silent --show-error http://localhost:8081/api/health
+                    if not errorlevel 1 exit /b 0
+                    timeout /t 5 /nobreak >nul
+                )
+                echo Deployment health check failed after 12 attempts.
+                exit /b 1
+                '''
             }
         }
     }
