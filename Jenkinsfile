@@ -1,4 +1,4 @@
-```groovy
+
 pipeline {
     agent any
 
@@ -6,7 +6,7 @@ pipeline {
         string(
             name: 'ROLLBACK_TAG',
             defaultValue: '',
-            description: 'Leave empty to build and deploy a new version. Enter an existing version tag to roll back.'
+            description: 'Leave empty to build and deploy. Enter an existing image tag to roll back manually.'
         )
     }
 
@@ -23,6 +23,30 @@ pipeline {
             steps {
                 git branch: 'main',
                     url: 'https://github.com/HardikMaster16/What2Cook.git'
+            }
+        }
+
+        stage('Load Deployment State') {
+            steps {
+                script {
+                    String savedTag = ''
+
+                    if (fileExists(env.JENKINS_STATE)) {
+                        savedTag = readFile(env.JENKINS_STATE).trim()
+                    }
+
+                    if (!savedTag) {
+                        savedTag = env.INITIAL_ROLLBACK_TAG
+                    }
+
+                    if (!(savedTag ==~ /[A-Za-z0-9_.-]+/)) {
+                        error('Invalid saved rollback tag.')
+                    }
+
+                    env.ROLLBACK_TARGET_TAG = savedTag
+
+                    echo "Current rollback target: ${env.ROLLBACK_TARGET_TAG}"
+                }
             }
         }
 
@@ -89,13 +113,25 @@ pipeline {
                 bat '''
                     docker image inspect what2cook-server:%IMAGE_TAG% >nul 2>&1
                     if errorlevel 1 (
-                        echo Server image tag not found.
+                        echo Selected server image tag not found.
                         exit /b 1
                     )
 
                     docker image inspect what2cook-frontend:%IMAGE_TAG% >nul 2>&1
                     if errorlevel 1 (
-                        echo Frontend image tag not found.
+                        echo Selected frontend image tag not found.
+                        exit /b 1
+                    )
+
+                    docker image inspect what2cook-server:%ROLLBACK_TARGET_TAG% >nul 2>&1
+                    if errorlevel 1 (
+                        echo Rollback server image tag not found.
+                        exit /b 1
+                    )
+
+                    docker image inspect what2cook-frontend:%ROLLBACK_TARGET_TAG% >nul 2>&1
+                    if errorlevel 1 (
+                        echo Rollback frontend image tag not found.
                         exit /b 1
                     )
                 '''
@@ -115,7 +151,7 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    int result = bat(
+                    int healthResult = bat(
                         returnStatus: true,
                         script: '''
                             @echo off
@@ -130,74 +166,43 @@ pipeline {
                         '''
                     )
 
-                    if (result != 0) {
-                        echo 'Health check failed. Starting automatic rollback.'
-
-                        String rollbackTag = env.ROLLBACK_TARGET_TAG
-
-                        if (!rollbackTag?.trim()) {
-                            rollbackTag = env.ROLLBACK_TAG?.trim()
-                        }
-
-                        if (!rollbackTag?.trim()) {
-                            rollbackTag = env.PREVIOUS_GOOD_TAG?.trim()
-                        }
-
-                        if (!rollbackTag?.trim()) {
-                            rollbackTag = env.INITIAL_ROLLBACK_TAG
-                        }
-
-                        if (!(rollbackTag ==~ /[A-Za-z0-9_.-]+/)) {
-                            error('Deployment failed and no valid rollback tag is available.')
-                        }
-
-                        env.ROLLBACK_TARGET_TAG = rollbackTag
+                    if (healthResult != 0) {
+                        echo "Deployment failed health checks. Rolling back to ${env.ROLLBACK_TARGET_TAG}."
 
                         int rollbackResult = bat(
                             returnStatus: true,
-                            script: """
+                            script: '''
                                 @echo off
-                                docker image inspect what2cook-server:${rollbackTag} >nul 2>&1
-                                if errorlevel 1 exit /b 1
+                                set "WHAT2COOK_IMAGE_TAG=%ROLLBACK_TARGET_TAG%"
 
-                                docker image inspect what2cook-frontend:${rollbackTag} >nul 2>&1
-                                if errorlevel 1 exit /b 1
-
-                                set "WHAT2COOK_IMAGE_TAG=${rollbackTag}"
                                 docker compose -p "%COMPOSE_PROJECT%" -f "%COMPOSE_FILE%" up -d --no-build --force-recreate server frontend
                                 if errorlevel 1 exit /b 1
 
                                 for /L %%i in (1,1,12) do (
+                                    echo Rollback health check attempt %%i of 12...
                                     curl.exe --fail --silent --show-error http://localhost:8081/api/health
                                     if not errorlevel 1 exit /b 0
                                     timeout /t 5 /nobreak >nul
                                 )
 
+                                echo Rollback health check failed.
                                 exit /b 1
-                            """
+                            '''
                         )
 
                         if (rollbackResult != 0) {
-                            error("Deployment failed and automatic rollback to ${rollbackTag} did not pass verification. Inspect container logs.")
+                            error("Automatic rollback failed. Check Docker container logs immediately.")
                         }
 
-                        error("New deployment failed health checks. Automatically rolled back to ${rollbackTag}.")
+                        error("New deployment failed. Previous version restored: ${env.ROLLBACK_TARGET_TAG}")
                     }
 
-                    // Read the current known-good tag, if one exists.
-                    String previousTag = ''
-                    if (fileExists(env.JENKINS_STATE)) {
-                        previousTag = readFile(env.JENKINS_STATE).trim()
-                    }
+                    echo 'Deployment health check passed.'
 
-                    if (!previousTag) {
-                        previousTag = env.INITIAL_ROLLBACK_TAG
-                    }
-
-                    // Save the previous tag before recording the new successful deployment.
+                    // Preserve the previous last-good tag.
                     writeFile(
                         file: 'what2cook-previous-good.txt',
-                        text: previousTag
+                        text: env.ROLLBACK_TARGET_TAG
                     )
 
                     bat '''
@@ -205,6 +210,7 @@ pipeline {
                         if errorlevel 1 exit /b 1
                     '''
 
+                    // Record the newly verified deployment.
                     writeFile(
                         file: 'what2cook-last-good.txt',
                         text: env.IMAGE_TAG
@@ -215,7 +221,7 @@ pipeline {
                         if errorlevel 1 exit /b 1
                     '''
 
-                    // Update the convenience latest tags only after health checks pass.
+                    // Update convenience latest tags after successful verification.
                     bat '''
                         docker tag what2cook-server:%IMAGE_TAG% what2cook-server:latest
                         if errorlevel 1 exit /b 1
@@ -232,9 +238,9 @@ pipeline {
         success {
             echo "What2Cook operation completed successfully. Selected tag: ${env.IMAGE_TAG}"
         }
+
         failure {
-            echo 'Pipeline failed. Check the console output and container logs.'
+            echo 'Pipeline failed. Check the Console Output and Docker container logs.'
         }
     }
 }
-```
